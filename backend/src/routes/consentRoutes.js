@@ -11,5 +11,4 @@ router.put("/reject/:id", auth, consentController.rejectConsent);
 router.put("/revoke/:id", auth, consentController.revokeConsent);
 router.post("/request", auth, consentController.requestConsent);
 
-
 module.exports = router;

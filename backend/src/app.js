@@ -13,18 +13,28 @@ const auditRoutes = require("./routes/auditRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const profileRoutes = require("./routes/profileRoutes");
 
+const path = require('path');
+
 
 const app = express();
 
+// 2. Fix for Static Files (the uploads folder)
+app.use('/uploads', (req, res, next) => {
+    res.set('Access-Control-Allow-Origin', 'http://localhost:5173');
+    next();
+}, express.static(path.join(__dirname, '..', 'uploads')));
+console.log("Serving images from:", path.join(__dirname, 'uploads'));
 
 app.use(express.json());           // Parse JSON body
-app.use(cors());                   // Enable CORS
-app.use(helmet());                 // Secure headers
+app.use(cors({ origin: "http://localhost:5173", credentials: true }));                   // Enable CORS
+               // Secure headers
 app.use(morgan("dev"));            // Log HTTP requests
-
-// serve uploaded files (profile images, resumes)
-const path = require('path');
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" }, // Fixes the blocked image
+    contentSecurityPolicy: false, // Fixes the 'default-src none' error
+  })
+);
 
 
 app.use("/api/auth", authRoutes);

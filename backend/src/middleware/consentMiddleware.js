@@ -10,12 +10,17 @@ module.exports = async (req, res, next) => {
     requester: requesterId,
     dataType,
     status: "approved",
-    expiryDate: { $gt: new Date() }
+    // Fix: Allow access if expiryDate doesn't exist OR is in the future
+    $or: [
+      { expiryDate: { $gt: new Date() } },
+      { expiryDate: { $exists: false } },
+      { expiryDate: null }
+    ]
   });
 
   if (!consent) {
     return res.status(403).json({
-      message: "Consent not available or expired"
+      message: "Consent not available, expired, or not yet approved"
     });
   }
 

@@ -9,10 +9,10 @@ import Notifications from "./pages/Notifications";
 import ProtectedRoute from "./components/ProtectedRoute";
 import NotificationToast from "./components/NotificationToast";
 import Toast from "./components/Toast";
-import RequestsToMe from "./pages/RequestsToMe";
+
 import Profile from "./pages/Profile";
 import AuditLogs from "./pages/AuditLogs";
-
+import ApprovedRequestDetail from "./pages/ApprovedRequestDetail";
 export default function App() {
   return (
     <BrowserRouter>
@@ -31,6 +31,8 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+       
+<Route path="/view-approved/:ownerId" element={<ProtectedRoute><ApprovedRequestDetail /></ProtectedRoute>} />
         <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
 
         <Route path="/audit-logs" element={<ProtectedRoute><AuditLogs /></ProtectedRoute>} />
@@ -65,14 +67,7 @@ export default function App() {
             </ProtectedRoute>
           }
         />
-         <Route
-  path="/requests-to-me"
-  element={
-    <ProtectedRoute>
-      <RequestsToMe />
-    </ProtectedRoute>
-  }
-/>
+        
       </Routes>
      
 

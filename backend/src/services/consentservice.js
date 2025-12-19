@@ -1,179 +1,135 @@
 const Consent = require("../models/consentModel");
 const User = require("../models/userModel");
+const DataRecord = require("../models/dataRecordModel"); // Added for sourcing live data
 const auditService = require("./auditservice");
 const notificationService = require("./notificationservice");
 
-// Create a request (pending) and notify the owner
+// 1. REQUEST CONSENT
 const requestConsent = async (data) => {
   const consent = await Consent.create({
     ...data,
     status: "pending"
   });
 
-  // Audit log for requester
   try {
     await auditService.logAction(data.requester, "CONSENT_REQUESTED", data.dataType, {
       resourceId: consent._id
     });
-  } catch (e) {}
-
-  // Notify owner
-  try {
-    const requesterUser = await User.findById(data.requester).select("name email");
+    
+    const requesterUser = await User.findById(data.requester).select("name");
     await notificationService.createNotification(data.dataOwner, {
+      user: data.dataOwner,
       title: "New Data Request",
       message: `${requesterUser ? requesterUser.name : 'A user'} requested access to ${data.dataType}`,
       type: "CONSENT",
       resourceId: consent._id
     });
-  } catch (e) {}
+  } catch (e) {
+    console.error("Non-blocking error in requestConsent logs:", e.message);
+  }
 
   return consent;
 };
 
-// Approve consent: update status, create audit log, notify requester, return data payload
+// 2. APPROVE CONSENT (With Live Data Sourcing)
 const approveConsent = async (id, ownerId) => {
   const consent = await Consent.findById(id);
   if (!consent) throw new Error("Consent not found");
-  // only the data owner may approve
+  
   if (String(consent.dataOwner) !== String(ownerId)) {
-    const err = new Error("Not authorized to approve this consent");
+    const err = new Error("Not authorized");
     err.status = 403;
     throw err;
   }
 
   consent.status = "approved";
+  // Grant access for 7 days by default
+  consent.expiryDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); 
   await consent.save();
 
-  await auditService.logAction(ownerId, "CONSENT_APPROVED", consent.dataType, {
-    resourceId: consent._id
+  // DUAL AUDIT LOGS
+  await auditService.logAction(ownerId, "CONSENT_APPROVED_BY_ME", consent.dataType, {
+    resourceId: consent._id,
+    details: { requester: consent.requester }
   });
 
-  // Notify requester
+  await auditService.logAction(consent.requester, "CONSENT_GRANTED_TO_ME", consent.dataType, {
+    resourceId: consent._id,
+    details: { approvedBy: ownerId }
+  });
+
+  const owner = await User.findById(ownerId).lean();
+
+  // SOURCE LIVE DATA FROM DATA RECORDS
+  // This is the bridge that makes Location/Camera "work" immediately upon approval
+  const latestDataRecord = await DataRecord.findOne({ 
+    owner: ownerId, 
+    dataType: consent.dataType 
+  }).sort({ createdAt: -1 });
+
+  // NOTIFICATIONS & SOCKETS
   try {
-    await notificationService.createNotification(consent.requester, {
+    const { sendNotification, sendData } = require("../sockets/notification");
+    
+    sendNotification(consent.requester.toString(), {
       title: "Consent Approved",
-      message: `Access granted for ${consent.dataType}`,
+      message: `${owner.name} granted you access to ${consent.dataType}`,
       type: "CONSENT",
       resourceId: consent._id
     });
-  } catch (e) {}
 
-  // Provide data based on dataType
-  const owner = await User.findById(consent.dataOwner).lean();
+    // Prepare payload for immediate delivery
+    let payload = null;
+    if (consent.dataType === "profile") {
+      payload = { name: owner.name, email: owner.email, bio: owner.bio, profileImage: owner.profileImage };
+    } else if (latestDataRecord) {
+      // Pull the actual coordinates or state from the DataRecord collection
+      payload = latestDataRecord.data; 
+    }
 
-  let payload = null;
-  if (consent.dataType === "profile") {
-    payload = {
-      name: owner.name,
-      email: owner.email,
-      linkedin: owner.linkedin,
-      bio: owner.bio,
-      profileImage: owner.profileImage,
-      resume: owner.resume,
-      additionalDetails: owner.additionalDetails
-    };
-  } else if (consent.dataType === "location") {
-    payload = { location: owner.locationData };
-  } else if (consent.dataType === "camera") {
-    // mark camera enabled for the owner (owner must have consented)
-    await User.findByIdAndUpdate(owner._id, { isCameraEnabled: true });
-    payload = { cameraEnabled: true };
-  } else if (consent.dataType === "document") {
-    payload = { resume: owner.resume };
+    sendData(consent.requester.toString(), { 
+      consentId: consent._id, 
+      dataType: consent.dataType, 
+      data: payload,
+      ownerId: ownerId
+    });
+  } catch (e) {
+    console.error("Socket notification error:", e.message);
   }
 
-  // Send data over socket to requester if connected
-  try {
-    const { sendData } = require("../sockets/notification");
-    // payload may be null for camera; send consent and payload
-    await sendData(consent.requester.toString(), { consentId: consent._id, dataType: consent.dataType, data: payload });
-  } catch (e) {}
-
-  return { consent, data: payload };
+  return consent;
 };
 
+// 3. REJECT CONSENT
 const rejectConsent = async (id, ownerId) => {
   const consent = await Consent.findById(id);
   if (!consent) throw new Error("Consent not found");
-
-  // only the data owner may reject
-  if (String(consent.dataOwner) !== String(ownerId)) {
-    const err = new Error("Not authorized to reject this consent");
-    err.status = 403;
-    throw err;
-  }
+  if (String(consent.dataOwner) !== String(ownerId)) throw new Error("Unauthorized");
 
   consent.status = "rejected";
   await consent.save();
 
-  await auditService.logAction(ownerId, "CONSENT_REJECTED", consent.dataType, {
-    resourceId: consent._id
-  });
-
-  try {
-    await notificationService.createNotification(consent.requester, {
-      title: "Consent Rejected",
-      message: `Access denied for ${consent.dataType}`,
-      type: "CONSENT",
-      resourceId: consent._id
-    });
-  } catch (e) {}
-
+  await auditService.logAction(ownerId, "CONSENT_REJECTED", consent.dataType, { resourceId: consent._id });
   return consent;
 };
 
-// Requests I RECEIVED (I am owner)
-const getRequestsToMe = async (userId) => {
-  return await Consent.find({ dataOwner: userId, status: "pending" }).populate(
-    "requester",
-    "name email"
-  );
-};
-
-// Requests I SENT
-const getMyRequests = async (userId) => {
-  return await Consent.find({ requester: userId }).populate("dataOwner", "name email");
-};
-
-// Approved consents I OWN
-const getMyApprovedConsents = async (userId) => {
-  return await Consent.find({ dataOwner: userId, status: "approved" }).populate(
-    "requester",
-    "name email"
-  );
-};
-
-// REVOKE: owner revokes a previously approved consent
+// 4. REVOKE CONSENT
 const revokeConsent = async (id, ownerId) => {
   const consent = await Consent.findById(id);
   if (!consent) throw new Error("Consent not found");
-
-  // only the data owner may revoke
-  if (String(consent.dataOwner) !== String(ownerId)) {
-    const err = new Error("Not authorized to revoke this consent");
-    err.status = 403;
-    throw err;
-  }
+  if (String(consent.dataOwner) !== String(ownerId)) throw new Error("Unauthorized");
 
   consent.status = "revoked";
   await consent.save();
 
-  await auditService.logAction(ownerId, "CONSENT_REVOKED", consent.dataType, {
-    resourceId: consent._id
-  });
-
-  try {
-    await notificationService.createNotification(consent.requester, {
-      title: "Consent Revoked",
-      message: `Access revoked for ${consent.dataType}`,
-      type: "CONSENT",
-      resourceId: consent._id
-    });
-  } catch (e) {}
-
+  await auditService.logAction(ownerId, "CONSENT_REVOKED", consent.dataType, { resourceId: consent._id });
   return consent;
 };
+
+// Helper Fetchers
+const getRequestsToMe = (userId) => Consent.find({ dataOwner: userId, status: "pending" }).populate("requester", "name email");
+const getMyRequests = (userId) => Consent.find({ requester: userId }).populate("dataOwner", "name email");
+const getMyApprovedConsents = (userId) => Consent.find({ dataOwner: userId, status: "approved" }).populate("requester", "name email");
 
 module.exports = {
   requestConsent,
