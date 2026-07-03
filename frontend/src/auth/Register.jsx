@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { registerUser } from "./authService";
+import { useNavigate, Link } from "react-router-dom"; // Added for navigation
 import "bootstrap/dist/css/bootstrap.min.css";
 
 export default function Register() {
+  const navigate = useNavigate();
   const [form, setForm] = useState({
     name: "",
     email: "",
@@ -14,7 +16,10 @@ export default function Register() {
     domain: "",
     description: ""
   });
+  
   const [message, setMessage] = useState("");
+  const [isError, setIsError] = useState(false);
+  const [loading, setLoading] = useState(false); // Added loading state
   const [image, setImage] = useState(null);
   const [resume, setResume] = useState(null);
 
@@ -24,15 +29,34 @@ export default function Register() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setLoading(true);
+    setMessage("");
+    
     try {
       const fd = new FormData();
-      Object.keys(form).forEach((k) => fd.append(k, form[k]));
+      
+      // Append all text fields
+      Object.keys(form).forEach((k) => {
+        if (form[k]) fd.append(k, form[k]);
+      });
+      
+      // Append files
       if (image) fd.append("image", image);
       if (resume) fd.append("resume", resume);
+
       await registerUser(fd);
-      setMessage("Registration successful. Please login.");
+      
+      setIsError(false);
+      setMessage("✅ Registration successful! Redirecting to login...");
+      
+      // Auto-redirect to login after 2 seconds
+      setTimeout(() => navigate("/"), 2000); 
+      
     } catch (err) {
-      setMessage("Registration failed");
+      setIsError(true);
+      setMessage(err.response?.data?.message || "❌ Registration failed. Try again.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -40,14 +64,14 @@ export default function Register() {
     <div style={styles.pageBackground}>
       <div className="container py-5">
         <div className="row justify-content-center">
-          <div className="col-md-8 col-lg-6">
+          <div className="col-md-8 col-lg-7">
             <div className="card shadow-lg border-0" style={styles.registerBox}>
               <div className="card-body p-4 p-md-5">
-                <h2 className="text-center mb-4 fw-bold text-dark">Create Account</h2>
+                <h2 className="text-center mb-2 fw-bold text-dark">Create Account</h2>
                 <p className="text-center text-muted mb-4">Join our consent-based data system</p>
 
                 {message && (
-                  <div className={`alert ${message.includes("successful") ? "alert-success" : "alert-danger"} text-center`}>
+                  <div className={`alert ${isError ? "alert-danger" : "alert-success"} text-center animate__animated animate__fadeIn`}>
                     {message}
                   </div>
                 )}
@@ -109,21 +133,22 @@ export default function Register() {
                     </div>
                   </div>
 
-                  <button className="btn btn-success btn-lg w-100 shadow-sm fw-bold mb-3" style={styles.actionBtn}>
-                    Register Now
+                  <button 
+                    disabled={loading} 
+                    className="btn btn-success btn-lg w-100 shadow-sm fw-bold mb-3" 
+                    style={styles.actionBtn}
+                  >
+                    {loading ? (
+                      <span className="spinner-border spinner-border-sm me-2"></span>
+                    ) : null}
+                    {loading ? "Registering..." : "Register Now"}
                   </button>
                 </form>
 
                 <div className="text-center mt-2">
                   <span className="text-muted small">Already have an account? </span>
-                  <a href="/" className="text-decoration-none small fw-bold text-primary">Login here</a>
+                  <Link to="/" className="text-decoration-none small fw-bold text-primary">Login here</Link>
                 </div>
-
-                {message && message.includes("successful") && (
-                  <div className="mt-3">
-                    <a href="/" className="btn btn-primary w-100 fw-bold">Proceed to Login</a>
-                  </div>
-                )}
               </div>
             </div>
           </div>
@@ -141,10 +166,11 @@ const styles = {
   },
   registerBox: {
     borderRadius: "20px",
-    backgroundColor: "rgba(255, 255, 255, 0.95)",
+    backgroundColor: "rgba(255, 255, 255, 0.98)",
   },
   actionBtn: {
     borderRadius: "10px",
     padding: "12px",
+    transition: "all 0.3s ease"
   }
 };

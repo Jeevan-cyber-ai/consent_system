@@ -1,10 +1,10 @@
 const Consent = require("../models/consentModel");
 const User = require("../models/userModel");
-const DataRecord = require("../models/dataRecordModel"); // Added for sourcing live data
+const DataRecord = require("../models/dataRecordModel");
 const auditService = require("./auditservice");
 const notificationService = require("./notificationservice");
 
-// 1. REQUEST CONSENT
+// 1. REQUEST CONSENT (Remains similar)
 const requestConsent = async (data) => {
   const consent = await Consent.create({
     ...data,
@@ -31,8 +31,7 @@ const requestConsent = async (data) => {
   return consent;
 };
 
-// 2. APPROVE CONSENT (With Live Data Sourcing)
-const approveConsent = async (id, ownerId) => {
+const approveConsent = async (id, ownerId, expiryHours) => {
   const consent = await Consent.findById(id);
   if (!consent) throw new Error("Consent not found");
   
@@ -42,63 +41,66 @@ const approveConsent = async (id, ownerId) => {
     throw err;
   }
 
+  const hours = parseInt(expiryHours) || 24;
+  const expiryDate = new Date();
+  expiryDate.setHours(expiryDate.getHours() + hours);
+
   consent.status = "approved";
-  // Grant access for 7 days by default
-  consent.expiryDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); 
+  consent.expiryDate = expiryDate; 
   await consent.save();
 
-  // DUAL AUDIT LOGS
-  await auditService.logAction(ownerId, "CONSENT_APPROVED_BY_ME", consent.dataType, {
-    resourceId: consent._id,
-    details: { requester: consent.requester }
-  });
-
-  await auditService.logAction(consent.requester, "CONSENT_GRANTED_TO_ME", consent.dataType, {
-    resourceId: consent._id,
-    details: { approvedBy: ownerId }
-  });
-
   const owner = await User.findById(ownerId).lean();
+  let payload = null;
 
-  // SOURCE LIVE DATA FROM DATA RECORDS
-  // This is the bridge that makes Location/Camera "work" immediately upon approval
-  const latestDataRecord = await DataRecord.findOne({ 
-    owner: ownerId, 
-    dataType: consent.dataType 
-  }).sort({ createdAt: -1 });
+  // --- STRICT DATA SEGREGATION LOGIC ---
+  if (consent.dataType === "profile") {
+    // Only send identity info, no location
+    payload = { 
+      name: owner.name, 
+      email: owner.email, 
+      bio: owner.bio,
+      collegeName: owner.collegeName,
+      course: owner.course,
+      dataType: "profile" 
+    };
+  } else if (consent.dataType === "location") {
+    // Fetch only coordinates from DataRecord
+    const latestLoc = await DataRecord.findOne({ owner: ownerId, dataType: "location" }).sort({ createdAt: -1 });
+    payload = {
+      lat: latestLoc?.data?.lat,
+      lon: latestLoc?.data?.lon,
+      dataType: "location"
+    };
+  } else if (consent.dataType === "document") {
+    const syncedDoc = await DataRecord.findOne({ owner: ownerId, dataType: "document" }).sort({ createdAt: -1 });
+    payload = syncedDoc ? syncedDoc.data : { value: owner.resume, isFile: true };
+  }
 
-  // NOTIFICATIONS & SOCKETS
   try {
     const { sendNotification, sendData } = require("../sockets/notification");
     
     sendNotification(consent.requester.toString(), {
       title: "Consent Approved",
-      message: `${owner.name} granted you access to ${consent.dataType}`,
+      message: `${owner.name} granted access to ${consent.dataType}`,
       type: "CONSENT",
       resourceId: consent._id
     });
-
-    // Prepare payload for immediate delivery
-    let payload = null;
-    if (consent.dataType === "profile") {
-      payload = { name: owner.name, email: owner.email, bio: owner.bio, profileImage: owner.profileImage };
-    } else if (latestDataRecord) {
-      // Pull the actual coordinates or state from the DataRecord collection
-      payload = latestDataRecord.data; 
-    }
 
     sendData(consent.requester.toString(), { 
       consentId: consent._id, 
       dataType: consent.dataType, 
       data: payload,
-      ownerId: ownerId
+      ownerId: ownerId,
+      expiresAt: expiryDate 
     });
   } catch (e) {
-    console.error("Socket notification error:", e.message);
+    console.error("Socket error:", e.message);
   }
 
   return consent;
 };
+
+// ... keep other functions (requestConsent, rejectConsent, etc.) same as before
 
 // 3. REJECT CONSENT
 const rejectConsent = async (id, ownerId) => {

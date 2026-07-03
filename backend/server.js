@@ -20,7 +20,13 @@ const helmet = require('helmet');
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
-    contentSecurityPolicy: false, // Prevents the 'default-src none' block you saw
+    contentSecurityPolicy: {
+      directives: {
+        ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+        "frame-src": ["'self'", "http://localhost:5000"], // Allow iframes from your backend
+        "img-src": ["'self'", "data:", "http://localhost:5000"],
+      },
+    },
   })
 );
 initSocket(server);

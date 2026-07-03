@@ -103,7 +103,7 @@ export default function RequestData() {
                         >
                           <span className="me-2">
                             {type === "profile" && "👤"}
-                            {type === "location" && "📍"}
+                            {type === "location" && ""}
                             {type === "camera" && "📷"}
                             {type === "document" && "📄"}
                           </span>

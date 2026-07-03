@@ -1,4 +1,4 @@
-const consentService = require("../services/consentService");
+const consentService = require("../services/consentservice");
 const Consent = require("../models/consentModel");
 // REQUEST (creates PENDING consent)
 exports.grantConsent = async (req, res) => {
@@ -21,7 +21,12 @@ exports.revokeConsent = async (req, res) => {
 };
 
 exports.approveConsent = async (req, res) => {
-  const result = await consentService.approveConsent(req.params.id, req.user.id);
+  // We expect { expiryHours: number } in req.body
+  const result = await consentService.approveConsent(
+    req.params.id, 
+    req.user.id, 
+    req.body.expiryHours 
+  );
   res.json(result);
 };
 

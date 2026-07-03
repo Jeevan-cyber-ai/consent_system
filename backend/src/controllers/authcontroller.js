@@ -31,10 +31,7 @@ exports.register = async (req, res) => {
     description
   });
 
-  const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, {
-    expiresIn: "1d"
-  });
-
+ 
   const safeUser = user.toObject();
   delete safeUser.password;
 
